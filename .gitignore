@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+
+# Logs
+logs/
+*.log
+
+# Environment variables
+.env
+.env.*
+
+# IDE specific files
+.vscode/    # Visual Studio Code
+.idea/      # PyCharm
+*.iml       # IntelliJ/PyCharm module files
+
+# OS generated files
+.DS_Store   # macOS
+Thumbs.db   # Windows
