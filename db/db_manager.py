@@ -68,7 +68,6 @@ class DBManager:
             with open(schema_path, 'r', encoding='utf-8') as f:
                 sql_script = f.read()
 
-            # 여러 SQL 문을 분리하여 실행 (pymysql은 한 번에 하나의 쿼리만 실행)
             sql_commands = sql_script.split(';')
             with conn.cursor() as cursor:
                 for command in sql_commands:
@@ -90,7 +89,8 @@ class DBManager:
             logger.error("DB 연결이 없어 테이블을 삭제할 수 없습니다.")
             return
 
-        tables_to_drop = ['minute_stock_data', 'daily_stock_data', 'stock_finance', 'stock_info'] # 순서 중요 (FK 관계)
+        # 외래 키 제약 조건이 있는 테이블부터 먼저 삭제
+        tables_to_drop = ['minute_stock_data', 'daily_stock_data', 'stock_info'] # stock_finance 제거
         try:
             with conn.cursor() as cursor:
                 for table_name in tables_to_drop:
@@ -104,14 +104,15 @@ class DBManager:
 
     def save_stock_info(self, stock_info_list):
         """
-        종목 기본 정보를 DB에 저장하거나 업데이트합니다.
-        :param stock_info_list: [{'stock_code': 'A005930', 'stock_name': '삼성전자', ...}, ...]
+        종목 기본 정보 및 최신 재무 데이터를 DB의 stock_info 테이블에 저장하거나 업데이트합니다.
+        :param stock_info_list: [{'stock_code': 'A005930', 'stock_name': '삼성전자', 'per': 10.5, ...}, ...]
         """
         conn = self.get_db_connection()
         if not conn: return False
         sql = """
-        INSERT INTO stock_info (stock_code, stock_name, market_type, sector, per, pbr, eps)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO stock_info
+        (stock_code, stock_name, market_type, sector, per, pbr, eps, roe, debt_ratio, sales, operating_profit, net_profit, recent_financial_date)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             stock_name=VALUES(stock_name),
             market_type=VALUES(market_type),
@@ -119,13 +120,39 @@ class DBManager:
             per=VALUES(per),
             pbr=VALUES(pbr),
             eps=VALUES(eps),
+            roe=VALUES(roe),
+            debt_ratio=VALUES(debt_ratio),
+            sales=VALUES(sales),
+            operating_profit=VALUES(operating_profit),
+            net_profit=VALUES(net_profit),
+            recent_financial_date=VALUES(recent_financial_date),
             upd_date=CURRENT_TIMESTAMP
         """
         try:
             with conn.cursor() as cursor:
-                data = [(info['stock_code'], info['stock_name'], info.get('market_type'),
-                        info.get('sector'), info.get('per'), info.get('pbr'), info.get('eps'))
-                        for info in stock_info_list]
+                data = []
+                for info in stock_info_list:
+                    # pbr은 Creon MarketEye에서 직접 제공되지 않을 수 있으므로, 기본값 0 또는 None
+                    # schema.sql에 pbr 컬럼이 있으므로, 값을 넣어주거나 NULL 허용해야 함
+                    pbr_value = info.get('pbr') # MarketEye에서 PBR 필드를 요청하지 않았다면 None이 될 것
+                    if pbr_value is None: # 또는 0.0으로 초기화
+                        pbr_value = 0.0 # 스키마가 DECIMAL(10,2)이고 NOT NULL이 아니므로 NULL도 가능
+
+                    data.append((
+                        info['stock_code'],
+                        info['stock_name'],
+                        info.get('market_type'),
+                        info.get('sector'),
+                        info.get('per'),
+                        pbr_value, # pbr 값 처리
+                        info.get('eps'),
+                        info.get('roe'),
+                        info.get('debt_ratio'),
+                        info.get('sales'),
+                        info.get('operating_profit'),
+                        info.get('net_profit'),
+                        info.get('recent_financial_date') # 새로운 재무 기준일 컬럼
+                    ))
                 cursor.executemany(sql, data)
             conn.commit()
             logger.debug(f"{len(stock_info_list)}개의 종목 정보를 저장/업데이트했습니다.")
@@ -137,13 +164,16 @@ class DBManager:
 
     def fetch_stock_info(self, stock_codes=None):
         """
-        DB에서 종목 기본 정보를 조회합니다.
+        DB에서 종목 기본 정보 및 최신 재무 데이터를 조회합니다.
         :param stock_codes: 조회할 종목 코드 리스트 (없으면 전체 조회)
         :return: Pandas DataFrame
         """
         conn = self.get_db_connection()
         if not conn: return pd.DataFrame()
-        sql = "SELECT stock_code, stock_name, market_type, sector, per, pbr, eps FROM stock_info"
+        sql = """
+        SELECT stock_code, stock_name, market_type, sector, per, pbr, eps, roe, debt_ratio, sales, operating_profit, net_profit, recent_financial_date
+        FROM stock_info
+        """
         if stock_codes:
             placeholders = ','.join(['%s'] * len(stock_codes))
             sql += f" WHERE stock_code IN ({placeholders})"
@@ -182,8 +212,8 @@ class DBManager:
         try:
             with conn.cursor() as cursor:
                 data = [(d['stock_code'], d['date'], d['open_price'], d['high_price'],
-                        d['low_price'], d['close_price'], d['volume'],
-                        d.get('change_rate'), d.get('trading_value'))
+                         d['low_price'], d['close_price'], d['volume'],
+                         d.get('change_rate'), d.get('trading_value'))
                         for d in daily_data_list]
                 cursor.executemany(sql, data)
             conn.commit()
@@ -266,7 +296,7 @@ class DBManager:
         try:
             with conn.cursor() as cursor:
                 data = [(d['stock_code'], d['datetime'], d['open_price'], d['high_price'],
-                        d['low_price'], d['close_price'], d['volume'])
+                         d['low_price'], d['close_price'], d['volume'])
                         for d in minute_data_list]
                 cursor.executemany(sql, data)
             conn.commit()
@@ -332,74 +362,4 @@ class DBManager:
             logger.error(f"최신 분봉 시각 조회 오류 ({stock_code}): {e}", exc_info=True)
             return None
 
-    def save_finance_data(self, finance_data_list):
-        """
-        재무 데이터를 DB에 저장하거나 업데이트합니다.
-        :param finance_data_list: [{'stock_code': 'A005930', 'base_date': '2022-12-31', ...}, ...]
-        """
-        conn = self.get_db_connection()
-        if not conn: return False
-        sql = """
-        INSERT INTO stock_finance
-        (stock_code, base_date, quarter, sales, operating_profit, net_profit, per, pbr, roe, debt_ratio)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON DUPLICATE KEY UPDATE
-            sales=VALUES(sales),
-            operating_profit=VALUES(operating_profit),
-            net_profit=VALUES(net_profit),
-            per=VALUES(per),
-            pbr=VALUES(pbr),
-            roe=VALUES(roe),
-            debt_ratio=VALUES(debt_ratio)
-        """
-        try:
-            with conn.cursor() as cursor:
-                data = [(d['stock_code'], d['base_date'], d['quarter'], d.get('sales'),
-                        d.get('operating_profit'), d.get('net_profit'), d.get('per'),
-                        d.get('pbr'), d.get('roe'), d.get('debt_ratio'))
-                        for d in finance_data_list]
-                cursor.executemany(sql, data)
-            conn.commit()
-            logger.debug(f"{len(finance_data_list)}개의 재무 데이터를 저장/업데이트했습니다.")
-            return True
-        except Exception as e:
-            logger.error(f"재무 데이터 저장/업데이트 오류: {e}", exc_info=True)
-            conn.rollback()
-            return False
-
-    def fetch_finance_data(self, stock_code, start_date=None, end_date=None, quarter=None):
-        """
-        DB에서 특정 종목의 재무 데이터를 조회합니다.
-        :param stock_code: 조회할 종목 코드
-        :param start_date: 시작 날짜 (YYYY-MM-DD 또는 date 객체)
-        :param end_date: 종료 날짜 (YYYY-MM-DD 또는 date 객체)
-        :param quarter: 특정 분기 데이터만 조회 (1, 2, 3, 4)
-        :return: Pandas DataFrame
-        """
-        conn = self.get_db_connection()
-        if not conn: return pd.DataFrame()
-        sql = """
-        SELECT stock_code, base_date, quarter, sales, operating_profit, net_profit, per, pbr, roe, debt_ratio
-        FROM stock_finance
-        WHERE stock_code = %s
-        """
-        params = [stock_code]
-        if start_date:
-            sql += " AND base_date >= %s"
-            params.append(start_date)
-        if end_date:
-            sql += " AND base_date <= %s"
-            params.append(end_date)
-        if quarter:
-            sql += " AND quarter = %s"
-            params.append(quarter)
-        sql += " ORDER BY base_date ASC"
-
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(sql, tuple(params))
-                result = cursor.fetchall()
-                return pd.DataFrame(result)
-        except Exception as e:
-            logger.error(f"재무 데이터 조회 오류 ({stock_code}, {start_date}~{end_date}, {quarter}): {e}", exc_info=True)
-            return pd.DataFrame()
+    # stock_finance 관련 메서드 제거 (save_finance_data, fetch_finance_data)
