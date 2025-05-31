@@ -12,6 +12,9 @@ sys.path.insert(0, project_root)
 
 from db.db_manager import DBManager
 from feeds.db_data_loader import DBDataLoader
+
+from strategies.simple_ma_strategy import SimpleMAStrategy
+
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                     handlers=[logging.StreamHandler(sys.stdout)])
@@ -125,37 +128,32 @@ class Backtester:
 
 # 테스트를 위한 메인 실행 블록
 if __name__ == '__main__':
-    # 테스트를 위한 전략 (아직 구현되지 않은 간단한 더미 전략)
-    class TestStrategy(bt.Strategy):
-        def __init__(self):
-            self.dataclose = self.datas[0].close
-
-        def next(self):
-            # 간단한 로그 출력 (실제 전략 로직은 아님)
-            # if len(self) % 50 == 0: # 50틱마다 한 번씩만 출력
-            #    logger.info(f'날짜: {self.datas[0].datetime.date(0)}, 종가: {self.dataclose[0]}')
-            pass # 실제 백테스팅 시에는 여기에 전략 로직을 추가
-
-        def notify_trade(self, trade):
-            if trade.isclosed:
-                logger.info(f'TRADE CLOSED: PnL {trade.pnl:.2f}, PnLComm {trade.pnlcomm:.2f}')
-
-        def notify_order(self, order):
-            if order.status in [order.Submitted, order.Accepted]:
-                return # 매수/매도 접수/수락 상태는 무시
-
-            if order.status in [order.Completed]:
-                if order.isbuy():
-                    logger.info(f'BUY EXECUTED, Price: {order.executed.price:.2f}, Cost: {order.executed.value:.2f}, Comm: {order.executed.comm:.2f}')
-                elif order.issell():
-                    logger.info(f'SELL EXECUTED, Price: {order.executed.price:.2f}, Cost: {order.executed.value:.2f}, Comm: {order.executed.comm:.2f}')
-            elif order.status in [order.Canceled, order.Margin, order.Rejected]:
-                logger.warning(f'Order Canceled/Margin/Rejected: {order.status}')
+    # TestStrategy 대신 SimpleMAStrategy를 직접 사용할 것이므로 이 클래스는 삭제하거나 주석 처리합니다.
+    # class TestStrategy(bt.Strategy):
+    #     def __init__(self):
+    #         self.dataclose = self.datas[0].close
+    #     def next(self):
+    #         pass
+    #     def notify_trade(self, trade):
+    #         if trade.isclosed:
+    #             logger.info(f'TRADE CLOSED: PnL {trade.pnl:.2f}, PnLComm {trade.pnlcomm:.2f}')
+    #     def notify_order(self, order):
+    #         if order.status in [order.Submitted, order.Accepted]:
+    #             return
+    #         if order.status in [order.Completed]:
+    #             if order.isbuy():
+    #                 logger.info(f'BUY EXECUTED, Price: {order.executed.price:.2f}, Cost: {order.executed.value:.2f}, Comm: {order.executed.comm:.2f}')
+    #             elif order.issell():
+    #                 logger.info(f'SELL EXECUTED, Price: {order.executed.price:.2f}, Cost: {order.executed.value:.2f}, Comm: {order.executed.comm:.2f}')
+    #         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
+    #             logger.warning(f'Order Canceled/Margin/Rejected: {order.status}')
 
 
-    # 테스트 기간 설정
-    end_date = date.today() - timedelta(days=3)
-    start_date = end_date - timedelta(days=120 * 1) # 1년치 데이터
+    # 테스트 기간 설정 (데이터가 있는 기간으로 조정)
+    # 현재 DB에 2025-01-29 ~ 2025-05-29 데이터가 81개 있다고 로그에 나왔으므로
+    # 이 기간으로 조정합니다.
+    end_date = date(2025, 5, 29) # 실제 데이터가 존재하는 마지막 날짜로 설정
+    start_date = date(2025, 1, 29) # 실제 데이터가 존재하는 시작 날짜로 설정
 
     # Backtester 인스턴스 생성
     backtester = Backtester(start_date=start_date, end_date=end_date)
@@ -164,8 +162,9 @@ if __name__ == '__main__':
     test_stock_code = 'A005930' # 삼성전자
     backtester.add_data(stock_code=test_stock_code, timeframe='daily')
 
-    # 전략 추가
-    backtester.add_strategy(TestStrategy) # 아직 로직 없는 간단한 전략
+    # --- 전략 추가 (TestStrategy 대신 SimpleMAStrategy 사용) ---
+    backtester.add_strategy(SimpleMAStrategy, sma_fast_period=5, sma_slow_period=20)
+    # --- 전략 추가 끝 ---
 
     # 백테스팅 실행
     logger.info(f"초기 자산: {backtester.cash:,.0f}원")
@@ -177,11 +176,10 @@ if __name__ == '__main__':
         total_pnl = final_portfolio_value - backtester.cash
         logger.info(f"총 손익: {total_pnl:,.0f}원")
 
-        # 최종 포트폴리오 가치 및 PnL을 직접 계산
-        if len(strategies) > 0 and hasattr(strategies[0], 'analyzers'):
-            # 백트레이더는 여러 전략을 동시에 실행할 수 있으므로 리스트로 반환됩니다.
-            # 여기서는 첫 번째 전략 인스턴스의 분석기(analyzer)에 접근합니다.
-            # analyzers를 추가하지 않았으므로 이 부분은 아직 활용되지 않습니다.
-            pass # 나중에 Analyzer 추가 시 여기에 로직 추가
+        # 백테스팅 결과 출력 (백테스팅 결과 시각화는 다음 단계에서)
+        # 예를 들어, 최종 포트폴리오 가치 변화를 그래프로 그리려면 cerebro.plot()을 사용할 수 있습니다.
+        # cerebro.plot()은 matplotlib을 사용하므로, GUI 환경에서 실행해야 합니다.
+        # 현재는 터미널 실행이므로 결과 값만 확인합니다.
+        # self.cerebro.plot() # 주석 처리, 나중에 GUI 환경에서 사용할 때 활성화
     else:
         logger.error("백테스팅이 정상적으로 실행되지 않았습니다.")
