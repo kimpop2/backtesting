@@ -29,36 +29,27 @@ class DBDataLoader:
         :param todate: 종료 날짜 (datetime.date)
         :return: backtrader.feeds.PandasData 인스턴스
         """
-        # db_manager의 fetch_daily_data가 date 객체를 직접 받을 수 있도록
-        # fromdate, todate를 그대로 전달합니다. (db_manager.py에 맞게 수정)
         logger.info(f"DB에서 {stock_code}의 일봉 데이터 로드 중: {fromdate} ~ {todate}")
         
-        # DBManager에서 이미 DataFrame을 반환하므로 바로 사용
-        # db_manager.py의 fetch_daily_data는 이미 datetime 객체로 변환된 'date' 컬럼을 반환합니다.
         df = self.db_manager.fetch_daily_data(
             stock_code=stock_code,
-            start_date=fromdate, # db_manager.py에 정의된 파라미터 타입에 맞춤
-            end_date=todate       # db_manager.py에 정의된 파라미터 타입에 맞춤
+            start_date=fromdate,
+            end_date=todate
         )
 
         if df.empty:
             logger.warning(f"DB에 {stock_code}의 일봉 데이터가 없습니다. (기간: {fromdate} ~ {todate})")
-            # DBManager가 컬럼을 가진 빈 DataFrame을 반환하므로, 컬럼 이름 변경만 하면 됩니다.
-            # 'date' 컬럼은 이미 datetime으로 변환된 상태입니다.
-            df.rename(columns={
-                'date': 'datetime', # backtrader의 기본 datetime 컬럼명으로 변경
-                'open_price': 'open',
-                'high_price': 'high',
-                'low_price': 'low',
-                'close_price': 'close',
-                'volume': 'volume'
-            }, inplace=True)
-            # 빈 DataFrame이라도 인덱스 설정은 일관성을 위해 유지
-            if 'datetime' in df.columns: # 'date'가 'datetime'으로 변경되었으므로 확인
-                df = df.set_index('datetime')
-            
-            # 여기서 PandasData의 'datetime' 파라미터는 DataFrame의 인덱스 이름(또는 컬럼 이름)을 지정합니다.
-            return bt.feeds.PandasData(dataname=df, fromdate=fromdate, todate=todate, datetime='datetime')
+            # 빈 DataFrame이라도 backtrader가 기대하는 컬럼과 인덱스 타입을 맞춥니다.
+            # 'date'를 'datetime'으로 변경 (rename)
+            # 'datetime'을 인덱스로 설정
+            # 인덱스를 datetime.datetime 타입으로 강제 변환
+            # (이 부분은 실제로 데이터가 없으면 빈 DataFrame에 적용되어도 오류는 안남)
+            df_columns = ['open', 'high', 'low', 'close', 'volume']
+            empty_df = pd.DataFrame(columns=df_columns)
+            empty_df.index.name = 'datetime' # 인덱스 이름 설정
+            empty_df.index = pd.to_datetime(empty_df.index) # 인덱스 타입을 datetime으로
+            return bt.feeds.PandasData(dataname=empty_df, fromdate=fromdate, todate=todate)
+
 
         # 데이터프레임의 컬럼명을 backtrader가 인식하는 이름으로 변경
         # 'date' 컬럼을 'datetime'으로 변경하고 인덱스로 설정
@@ -72,13 +63,18 @@ class DBDataLoader:
         }, inplace=True)
 
         df = df.set_index('datetime') # 'datetime' 컬럼을 인덱스로 설정
+        
+        # !!!! 중요: 인덱스가 datetime.datetime 타입인지 확인하고 변환 (이번 오류 해결을 위해)
+        # pd.to_datetime은 이미 datetime.datetime 객체인 경우 아무것도 하지 않고 반환합니다.
+        # datetime.date 객체인 경우, 00:00:00 시간을 추가하여 datetime.datetime으로 변환합니다.
+        df.index = pd.to_datetime(df.index) 
+        
         df = df.sort_index()          # 시간 순서대로 정렬
 
         df = df[['open', 'high', 'low', 'close', 'volume']] # backtrader에 필요한 OHLCV 컬럼만 선택
         
         logger.info(f"{stock_code} 일봉 데이터 {len(df)}개 로드 완료.")
-        # PandasData의 datetime 파라미터는 인덱스 이름이므로 'datetime'으로 지정
-        return bt.feeds.PandasData(dataname=df, fromdate=fromdate, todate=todate, datetime='datetime')
+        return bt.feeds.PandasData(dataname=df, fromdate=fromdate, todate=todate)
 
     def load_minute_data(self, stock_code: str, fromdatetime: datetime, todatetime: datetime) -> bt.feeds.PandasData:
         """
@@ -88,30 +84,20 @@ class DBDataLoader:
         :param todatetime: 종료 날짜/시간 (datetime.datetime)
         :return: backtrader.feeds.PandasData 인스턴스
         """
-        # db_manager의 fetch_minute_data가 datetime 객체를 직접 받을 수 있도록
-        # fromdatetime, todatetime을 그대로 전달합니다.
         logger.info(f"DB에서 {stock_code}의 분봉 데이터 로드 중: {fromdatetime} ~ {todatetime}")
         df = self.db_manager.fetch_minute_data(
             stock_code=stock_code,
-            start_datetime=fromdatetime, # db_manager.py에 정의된 파라미터 타입에 맞춤
-            end_datetime=todatetime       # db_manager.py에 정의된 파라미터 타입에 맞춤
+            start_datetime=fromdatetime,
+            end_datetime=todatetime
         )
 
         if df.empty:
             logger.warning(f"DB에 {stock_code}의 분봉 데이터가 없습니다. (기간: {fromdatetime} ~ {todatetime})")
-            # DBManager가 컬럼을 가진 빈 DataFrame을 반환하므로, 컬럼 이름 변경만 하면 됩니다.
-            # 'datetime' 컬럼은 이미 datetime으로 변환된 상태입니다.
-            df.rename(columns={
-                'open_price': 'open',
-                'high_price': 'high',
-                'low_price': 'low',
-                'close_price': 'close',
-                'volume': 'volume'
-            }, inplace=True)
-            if 'datetime' in df.columns: # 이미 'datetime' 컬럼이 존재하므로 확인
-                df = df.set_index('datetime')
-
-            return bt.feeds.PandasData(dataname=df, fromdate=fromdatetime, todate=todatetime, datetime='datetime')
+            df_columns = ['open', 'high', 'low', 'close', 'volume']
+            empty_df = pd.DataFrame(columns=df_columns)
+            empty_df.index.name = 'datetime'
+            empty_df.index = pd.to_datetime(empty_df.index) # 인덱스 타입을 datetime으로
+            return bt.feeds.PandasData(dataname=empty_df, fromdate=fromdatetime, todate=todatetime)
 
         df.rename(columns={
             'open_price': 'open',
@@ -122,9 +108,13 @@ class DBDataLoader:
         }, inplace=True)
         
         df = df.set_index('datetime') # 'datetime' 컬럼을 인덱스로 설정
+        
+        # 분봉 데이터는 이미 datetime.datetime 타입일 가능성이 높지만, 혹시 모를 상황에 대비하여 추가
+        df.index = pd.to_datetime(df.index) 
+        
         df = df.sort_index()          # 시간 순서대로 정렬
 
         df = df[['open', 'high', 'low', 'close', 'volume']]
         
         logger.info(f"{stock_code} 분봉 데이터 {len(df)}개 로드 완료.")
-        return bt.feeds.PandasData(dataname=df, fromdate=fromdatetime, todate=todatetime, datetime='datetime')
+        return bt.feeds.PandasData(dataname=df, fromdate=fromdatetime, todate=todatetime)
